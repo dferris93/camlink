@@ -21,12 +21,13 @@ AUTH_COMMAND = 'printf "WEBCAM_SSH_READY %s\\n" "$SSH_CONNECTION"; exec cat >/de
 REMOTE_SETUP = r'''set -euo pipefail
 export LC_ALL=C
 if [[ ! -c /dev/video42 ]]; then
-  sudo -n modprobe v4l2loopback devices=1 video_nr=42 card_label="Laptop Webcam" exclusive_caps=1
+  sudo -n modprobe v4l2loopback devices=1 video_nr=42 card_label="Remote Webcam" exclusive_caps=1
   udevadm settle
 fi
 if [[ ! -r /sys/class/video4linux/video42/name ]] ||
-   [[ "$(cat /sys/class/video4linux/video42/name)" != "Laptop Webcam" ]]; then
-  echo 'Expected Laptop Webcam at /dev/video42; refusing a different device.' >&2
+   [[ "$(cat /sys/class/video4linux/video42/name)" != "Remote Webcam" ]]; then
+  echo 'Expected Remote Webcam at /dev/video42; refusing a different device.' >&2
+  echo 'If upgrading CamLink, update card_label="Remote Webcam" in the receiver modprobe configuration and reboot. See README: Common receiver setup.' >&2
   exit 1
 fi
 [[ -w /dev/video42 ]] || { echo 'No write access to /dev/video42.' >&2; exit 1; }
@@ -403,7 +404,7 @@ class StreamController(QObject):
                 if name in ("SSH connection", "Receiver setup"):
                     hint = " Check SSH access and the details below."
                 elif name in ("Receiver configuration", "Video verification"):
-                    hint = " Release Laptop Webcam in Zoom or other video apps, then retry. See details below."
+                    hint = " Release Remote Webcam in Zoom or other video apps, then retry. See details below."
                 elif name == "Receiver" and self.config.transport == "rtp":
                     hint = f" Check UDP port {self.config.udp_port}, the firewall, and Connection details."
                 else:

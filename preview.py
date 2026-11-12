@@ -50,7 +50,7 @@ class PreviewPipe(QObject):
     def start(self):
         self.stop()
         try:
-            self.directory = tempfile.TemporaryDirectory(prefix="laptop-webcam-preview-")
+            self.directory = tempfile.TemporaryDirectory(prefix="remote-webcam-preview-")
             path = Path(self.directory.name) / "frames"
             os.mkfifo(path, 0o600)
             # O_RDWR avoids EOF/busy polling before GStreamer opens its writer.

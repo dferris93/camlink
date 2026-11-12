@@ -1,6 +1,8 @@
 import json
 import os
 from pathlib import Path
+import shlex
+import subprocess
 import sys
 import tempfile
 import time
@@ -14,7 +16,7 @@ from PyQt6.QtWidgets import QApplication, QDialog, QLineEdit
 
 from app import WebcamWindow
 from cameras import parse_cameras
-from stream import StreamConfig, StreamController, sender_arguments
+from stream import REMOTE_SETUP, StreamConfig, StreamController, sender_arguments
 from remote import validate_remote_format
 
 TEST_RECEIVER = "test@receiver.example"
@@ -83,6 +85,44 @@ class CameraTests(unittest.TestCase):
                 StreamConfig("1042", 640, 480, Fraction(30), host).validate()
 
 
+class ReceiverSetupTests(unittest.TestCase):
+    def test_only_remote_webcam_reaches_configuration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            name = root / "camera-name"
+            calls = root / "configured"
+            # Exercise the actual Bash guard with a harmless writable character
+            # device and a fixture sysfs name, without touching a real webcam.
+            script = REMOTE_SETUP.replace("/dev/video42", "/dev/null").replace(
+                "/sys/class/video4linux/video42/name", str(name))
+            command = root / "v4l2-ctl"
+            command.write_text(f"#!/bin/sh\nprintf '%s\\n' configured > {shlex.quote(str(calls))}\n")
+            command.chmod(0o755)
+            ffmpeg = root / "ffmpeg"
+            ffmpeg.write_text("#!/bin/sh\nexit 0\n")
+            ffmpeg.chmod(0o755)
+            environment = {**os.environ, "PATH": directory + os.pathsep + os.environ["PATH"]}
+            for label in ("Remote Webcam", "Laptop Webcam", "Unrelated camera", None):
+                with self.subTest(label=label):
+                    calls.unlink(missing_ok=True)
+                    if label is None:
+                        name.unlink()
+                    else:
+                        name.write_text(label + "\n")
+                    result = subprocess.run(["bash", "-s"], input=script, text=True,
+                                            capture_output=True, env=environment, timeout=5)
+                    if label == "Remote Webcam":
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertTrue(calls.exists())
+                    else:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertFalse(calls.exists())
+                        self.assertIn("Expected Remote Webcam", result.stderr)
+                        if label == "Laptop Webcam":
+                            self.assertIn('card_label="Remote Webcam"', result.stderr)
+                            self.assertIn("reboot", result.stderr)
+
+
 class ProcessAndWindowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -133,7 +173,7 @@ elif '--get-fmt-video' in sys.argv[-1]:
     if (root/'clamp-on-verify').exists():
         width, height = 1280, 800
     print_format(width, height)
-elif 'laptop-webcam-srtp' in sys.argv[-1]:
+elif 'remote-webcam-srtp' in sys.argv[-1]:
     import json, base64
     settings = json.loads(sys.stdin.readline())
     assert len(base64.b64decode(settings['key'])) == 30

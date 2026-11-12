@@ -1,4 +1,4 @@
-"""laptop-webcam-srtp: GStreamer worker; configuration and key arrive on stdin.
+"""remote-webcam-srtp: GStreamer worker; configuration and key arrive on stdin.
 
 Runs with the system Python/GStreamer bindings, locally or through SSH. No
 credentials appear in arguments, environment variables, SDP files or logs.

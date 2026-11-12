@@ -20,7 +20,7 @@ def validate_remote_format(config, output):
             or int(size[1]) != config.width * config.height * 3 // 2):
         raise ValueError(
             "The remote camera accepted an incompatible pixel format or frame layout. "
-            "Release Laptop Webcam in Zoom or other video apps, then retry."
+            "Release Remote Webcam in Zoom or other video apps, then retry."
         )
 
 

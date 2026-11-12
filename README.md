@@ -1,13 +1,144 @@
 # CamLink
 
-PyQt6 desktop app for sending a local webcam over SSH or encrypted SRTP/UDP to the `Laptop Webcam`
+PyQt6 desktop app for sending a local webcam over SSH or encrypted SRTP/UDP to the `Remote Webcam`
 virtual camera (`/dev/video42`) on the remote computer.
 
-After installing the dependencies below, run from the checkout:
+## Quick start
+
+The **sender** is the Linux desktop with the physical webcam. The **receiver**
+is the Linux computer running Zoom or another video app. Choose the Ubuntu or
+Fedora commands separately for each computer; their distributions can differ.
+The Ubuntu commands target Ubuntu 24.04 LTS and compatible releases.
+
+**Use Secure RTP (UDP) for video.** It is recommended for low latency,
+especially on lossy networks. Use SSH video only as a fallback when UDP is
+unavailable. Both transports still require SSH for sign-in and receiver setup;
+see [Video transport and sign-in](#video-transport-and-sign-in) for details.
+
+### 1. Install the sender dependencies
+
+Run **one** of these blocks on the computer with the webcam. These include
+libcamera integration for built-in cameras; the camera's driver and firmware
+must already work with PipeWire.
+
+**Ubuntu sender:**
+
+```bash
+sudo apt update
+sudo apt install software-properties-common
+sudo add-apt-repository -y universe
+sudo apt update
+sudo apt install python3 python3-venv python3-pip python3-gi \
+  gir1.2-gstreamer-1.0 openssh-client pipewire pipewire-bin wireplumber \
+  gstreamer1.0-tools gstreamer1.0-pipewire gstreamer1.0-plugins-base \
+  gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+  gstreamer1.0-plugins-ugly libspa-0.2-libcamera libxcb-cursor0 \
+  libxkbcommon-x11-0 desktop-file-utils
+```
+
+**Fedora sender:**
+
+```bash
+sudo dnf install \
+  "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm"
+sudo dnf install python3 python3-pip python3-gobject openssh-clients \
+  pipewire pipewire-utils wireplumber pipewire-gstreamer \
+  pipewire-plugin-libcamera gstreamer1 gstreamer1-plugins-base \
+  gstreamer1-plugins-good gstreamer1-plugins-bad-free \
+  gstreamer1-plugins-ugly xcb-util-cursor libxkbcommon-x11 desktop-file-utils
+```
+
+Download or clone this repository on the sender, open a terminal in its root
+directory (the folder containing `requirements.txt`), and install the app in
+its own virtual environment:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+### 2. Install the receiver dependencies
+
+Run **one** of these blocks on the remote computer. It does not need a CamLink
+checkout or a Python virtual environment.
+
+**Ubuntu receiver:**
+
+```bash
+sudo apt update
+sudo apt install software-properties-common
+sudo add-apt-repository -y universe
+sudo apt update
+sudo apt install openssh-server ffmpeg v4l-utils v4l2loopback-dkms \
+  "linux-headers-$(uname -r)" kmod python3 python3-gi \
+  gir1.2-gstreamer-1.0 gstreamer1.0-tools gstreamer1.0-plugins-base \
+  gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
+sudo systemctl enable --now ssh
+```
+
+**Fedora receiver:** The conditional command replaces `ffmpeg-free` if it is
+installed; review DNF's proposed package changes before accepting.
+
+```bash
+sudo dnf install \
+  "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm"
+if rpm -q ffmpeg-free >/dev/null 2>&1; then
+  sudo dnf swap ffmpeg-free ffmpeg --allowerasing
+fi
+sudo dnf install openssh-server ffmpeg v4l-utils akmod-v4l2loopback \
+  kernel-devel-matched python3 python3-gobject gstreamer1 \
+  gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free
+sudo systemctl enable --now sshd
+sudo akmods --force
+modinfo v4l2loopback
+```
+
+The module needs headers/development files matching the running kernel. If
+the build fails or Secure Boot rejects it, follow the distribution notes in
+[Install](#install) before continuing.
+
+### 3. Create the receiver's virtual webcam
+
+On **either receiver distribution**, run this as the user CamLink will SSH
+into. It creates the device now and configures it to return after reboot:
+
+```bash
+printf '%s\n' 'v4l2loopback' | sudo tee /etc/modules-load.d/camlink.conf
+printf '%s\n' 'options v4l2loopback devices=1 video_nr=42 card_label="Remote Webcam" exclusive_caps=1' \
+  | sudo tee /etc/modprobe.d/camlink.conf
+sudo modprobe v4l2loopback devices=1 video_nr=42 \
+  card_label="Remote Webcam" exclusive_caps=1
+sudo udevadm settle
+sudo usermod -aG video "$USER"
+```
+
+Log out and back in, and reconnect any existing SSH session, so the new group
+membership takes effect. If v4l2loopback was already loaded with different
+settings, see [Common receiver setup](#common-receiver-setup).
+
+Allow SSH and your chosen SRTP UDP port through the receiver's firewall and
+any intervening router/firewall. The app defaults to UDP **5004**; it lets you
+choose a different port. Copyable UFW and firewalld examples are in
+[Common receiver setup](#common-receiver-setup).
+
+### 4. Launch and stream
+
+Back on the **sender**, run from the repository directory as your normal
+desktop user:
 
 ```bash
 ./camlink
 ```
+
+Choose the camera, resolution and frame rate, enter the receiver as
+`user@hostname`, select **Secure RTP (UDP)** and the allowed UDP port, then
+click **Start streaming**. In Zoom on the receiver, select **Remote Webcam**.
+Use **SSH** video only if the direct UDP path is unavailable.
+
+For package explanations, optional desktop shortcuts and troubleshooting,
+see [Install](#install).
+
+## Using CamLink
 
 The launcher uses this project's `.venv` automatically. Choose a camera,
 resolution, frame rate and video transport, enter the remote computer as
@@ -26,7 +157,8 @@ private local pipe and are not saved as video or image files.
 External cameras are preferred initially. Your camera name, resolution, frame
 rate, receiver, transport, RTP destination and port are remembered; unavailable saved cameras fall back to the
 first detected camera. Existing installations retain their settings and desktop
-identity from the earlier Laptop Webcam name.
+identity through the legacy internal identifiers. For an existing receiver,
+follow the camera-label migration in [Common receiver setup](#common-receiver-setup).
 
 The selectors use PipeWire's advertised modes. Cameras that omit frame rates
 offer 15, 24, 25, 30 and 60 fps, with a notice that these are requests rather than
@@ -36,15 +168,25 @@ built-in camera's broken PipeWire timestamps.
 
 ## Video transport and sign-in
 
-**SSH** sends H.264 video in MPEG-TS through the encrypted SSH connection.
-**Secure RTP (UDP)** sends encrypted, authenticated H.264 SRTP packets directly
-to the remote computer over UDP. Saved RTP settings automatically use SRTP;
-there is no unencrypted UDP fallback.
+**Secure RTP (UDP) is the recommended video transport**, especially on lossy
+networks. It sends encrypted, authenticated H.264 SRTP packets directly to the
+remote computer over UDP. UDP avoids waiting for TCP retransmissions before
+delivering newer video packets, which can reduce latency and stalls when
+packets are lost. Loss can still cause dropped frames or visible artifacts;
+SRTP does not recover missing packets. See
+[RFC 9317's discussion of media transport](https://www.rfc-editor.org/rfc/rfc9317.html#section-6.2).
+Saved RTP settings automatically use SRTP; there is no unencrypted UDP fallback.
+
+**SSH video is recommended only as a fallback** when UDP is blocked or the
+receiver cannot be reached directly over UDP. It sends H.264 video in MPEG-TS
+through the encrypted SSH connection. TCP's ordered delivery can hold up
+newer video while lost packets are retransmitted.
+
 Both modes use SSH to prepare the virtual camera, start FFmpeg, check the video
 format, and stop the receiver. Both include the local preview.
 
 Select **Secure RTP (UDP)** to reveal **RTP port** and **RTP destination**. The port can
-be any number from 1024 through 65535, including odd ports such as **11111**;
+be any number from 1024 through 65535, including odd ports;
 5004 is the initial default. The receiver binds the selected port, and the
 sender uses that same port. This video-only SRTP path uses one UDP port.
 Allow inbound UDP to the selected RTP port from the laptop through any
@@ -227,11 +369,11 @@ provides `v4l2-ctl`.
 
 Run these commands on the receiver, using the account that CamLink will SSH
 into. The current application expects device number **42**, card label
-**Laptop Webcam**, and `exclusive_caps=1`:
+**Remote Webcam**, and `exclusive_caps=1`:
 
 ```bash
 sudo modprobe v4l2loopback devices=1 video_nr=42 \
-  card_label="Laptop Webcam" exclusive_caps=1
+  card_label="Remote Webcam" exclusive_caps=1
 sudo udevadm settle
 sudo usermod -aG video "$USER"
 ```
@@ -247,9 +389,26 @@ For a persistent device after reboot:
 
 ```bash
 printf '%s\n' 'v4l2loopback' | sudo tee /etc/modules-load.d/camlink.conf
-printf '%s\n' 'options v4l2loopback devices=1 video_nr=42 card_label="Laptop Webcam" exclusive_caps=1' \
+printf '%s\n' 'options v4l2loopback devices=1 video_nr=42 card_label="Remote Webcam" exclusive_caps=1' \
   | sudo tee /etc/modprobe.d/camlink.conf
 ```
+
+**Upgrading an existing receiver:** Older versions used the camera label
+`Laptop Webcam`. Run the persistence commands above and update any existing
+v4l2loopback options in other files under `/etc/modprobe.d/` to use
+`card_label="Remote Webcam"`. Keep the device number and other module options
+consistent. Stop CamLink and reboot the receiver when convenient; running
+`modprobe` again does not rename a device whose module is already loaded.
+Do not unload a module used by other cameras. After reboot, verify the name:
+
+```bash
+cat /sys/class/video4linux/video42/name
+```
+
+It should print `Remote Webcam`. Start CamLink and select **Remote Webcam**
+again in Zoom or other video apps. CamLink rejects a device with the old label
+and shows upgrade instructions in Connection details until the migration is
+complete. Saved sender settings and desktop shortcuts are preserved.
 
 With the device already loaded and writable, streaming requires no sudo.
 If it is missing, CamLink attempts `sudo -n modprobe ...`; an SSH password/MFA
@@ -263,16 +422,16 @@ Allow SSH to the receiver. For SRTP, also allow the chosen **UDP destination
 port** from the sender through the receiver firewall and any intervening
 router/firewall. Ubuntu commonly uses UFW, while Fedora commonly uses
 firewalld. For example, replacing `192.0.2.10` with the sender address and
-`11111` with your chosen port. On Fedora, replace `public` with the receiving
+`5004` with your chosen port. On Fedora, replace `public` with the receiving
 interface's zone shown by `firewall-cmd --get-active-zones`:
 
 ```bash
 # Ubuntu receiver, if UFW is enabled:
-sudo ufw allow from 192.0.2.10 to any port 11111 proto udp
+sudo ufw allow from 192.0.2.10 to any port 5004 proto udp
 
 # Fedora receiver, if firewalld is enabled (use the receiving interface's zone):
 sudo firewall-cmd --get-active-zones
-sudo firewall-cmd --permanent --zone=public --add-rich-rule='rule family="ipv4" source address="192.0.2.10/32" port port="11111" protocol="udp" accept'
+sudo firewall-cmd --permanent --zone=public --add-rich-rule='rule family="ipv4" source address="192.0.2.10/32" port port="5004" protocol="udp" accept'
 sudo firewall-cmd --reload
 ```
 
@@ -345,7 +504,7 @@ virtual camera to its previous size. The app checks the accepted format before
 capture, after configuring the device, and after video starts. If the device
 returns a different size or layout, the app stops with instructions instead of
 reporting a mismatched stream as working. Start the stream at the new resolution,
-then select **Laptop Webcam** again in Zoom. 1080p remains available when the
+then select **Remote Webcam** again in Zoom. 1080p remains available when the
 camera supports it and the remote device is free to change modes.
 
 ## Tests

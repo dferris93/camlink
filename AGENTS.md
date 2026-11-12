@@ -6,7 +6,7 @@ CamLink is a Linux PyQt6 desktop application that shares a local PipeWire webcam
 with a remote Linux computer. Users select the camera, resolution, frame rate,
 SSH destination, and either encrypted SSH video or authenticated SRTP over UDP.
 Both transports use SSH for remote setup and lifecycle control. The remote
-output is the v4l2loopback device `/dev/video42`, labeled `Laptop Webcam`, for
+output is the v4l2loopback device `/dev/video42`, labeled `Remote Webcam`, for
 Zoom and other video applications. Local preview shares the camera capture.
 
 Run the GUI through `./camlink`; it uses the checkout's `.venv`. SRTP workers
@@ -52,9 +52,14 @@ README.md for sender/receiver dependencies on Ubuntu and Fedora.
   black frames and consume excessive CPU. Preview rate limiting happens later.
 - Use camera-advertised frame rates where available. Fallback rates, including
   60 fps, are requests, not proof that a camera physically produces that rate.
-- Keep the public CamLink name separate from compatibility identifiers:
-  `QSettings("LocalTools", "LaptopWebcam")`, desktop ID `laptop-webcam`, and the
-  remote camera label remain intentional. Changes need a migration strategy.
+- The app is CamLink; its remote virtual camera is `Remote Webcam`. Use that
+  camera label consistently in receiver setup, validation, UI and documentation.
+  Existing receivers with the old label need their v4l2loopback `card_label`
+  updated and a reboot, as documented in README.md. Never unload an active
+  module or accept an unrelated device to bypass the name check.
+- Keep `QSettings("LocalTools", "LaptopWebcam")` and desktop ID `laptop-webcam`
+  as compatibility identifiers so preferences and shortcuts survive upgrades.
+  Changing either identifier requires a migration strategy.
 - Keep machine-specific receivers, usernames, addresses and paths out of the
   checkout. Use user settings and explicit configuration; tests use reserved
   example destinations and loopback sockets.
@@ -69,7 +74,7 @@ implementation for meaningful failure and lifecycle checks.
 | --- | --- |
 | Camera discovery and modes | Built-in/USB classification, external preference, virtual-device exclusion, empty inventory, scalar/list/range modes, fractional and missing frame rates |
 | Qt and process lifecycle | First-run destination validation, persisted selectors, start/stop/restart, capture/setup failures, watchdog timeout, window close and resource cleanup |
-| Remote format safety | Silent resolution clamping before capture, races during configuration and after startup, invalid pixel format/stride/buffer size |
+| Receiver identity and format safety | Accept `Remote Webcam`; reject old, unrelated or unreadable device names before configuration, with upgrade guidance for the old name; silent resolution clamping before capture, races during configuration and after startup, invalid pixel format/stride/buffer size |
 | Authentication | Password followed by verification code through the actual askpass helper, one shared connection, masked fields, cancellation and no credential leakage |
 | Preview | Fragmented JPEG boundaries, bounded malformed-input buffering, private FIFO permissions/cleanup, and a real pipeline splitting one source into stream plus preview |
 | SRTP | Real encrypted H.264 decoding on a selected odd UDP port, fresh keys/SSRCs on restart, no keys in argv/logs, receiver shutdown without video |

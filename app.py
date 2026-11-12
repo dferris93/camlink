@@ -25,6 +25,7 @@ class WebcamWindow(QMainWindow):
         self.setWindowIcon(QIcon(str(Path(__file__).with_name("webcam.svg"))))
         self.resize(1080, 650)
         self.setMinimumWidth(900)
+        # Keep the legacy storage ID so upgrades retain saved preferences.
         self.settings = QSettings("LocalTools", "LaptopWebcam")
         self.cameras = []
         self.closing = False
@@ -92,7 +93,7 @@ class WebcamWindow(QMainWindow):
         receiver_form.setContentsMargins(20, 18, 20, 18)
         self.receiver_edit = QLineEdit(self.settings.value("receiver", ""))
         self.receiver_edit.setPlaceholderText("user@hostname")
-        self.receiver_edit.setToolTip("SSH destination containing the Laptop Webcam virtual camera.")
+        self.receiver_edit.setToolTip("SSH destination containing the Remote Webcam virtual camera.")
         receiver_form.addRow("Remote computer", self.receiver_edit)
         self.transport_box = QComboBox()
         self.transport_box.addItem("SSH", "ssh")
@@ -115,7 +116,7 @@ class WebcamWindow(QMainWindow):
         self.receiver_form = receiver_form
         self.transport_box.currentIndexChanged.connect(self.transport_changed)
         self.transport_changed()
-        receiver_hint = QLabel('Appears as “Laptop Webcam”. Release it in Zoom before changing resolution.')
+        receiver_hint = QLabel('Appears as “Remote Webcam”. Release it in Zoom before changing resolution.')
         receiver_hint.setWordWrap(True)
         receiver_hint.setObjectName("hint")
         receiver_form.addRow("", receiver_hint)
