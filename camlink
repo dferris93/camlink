@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+app_dir="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")"
+if [[ ! -x "$app_dir/.venv/bin/python" ]]; then
+  printf 'Create the CamLink virtual environment first; see %s/README.md\n' "$app_dir" >&2
+  exit 1
+fi
+exec "$app_dir/.venv/bin/python" "$app_dir/app.py" "$@"

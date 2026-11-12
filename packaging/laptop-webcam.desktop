@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=CamLink
+Comment=Securely share a webcam with a remote computer
+Exec=camlink
+Icon=camlink
+Terminal=false
+Categories=AudioVideo;Video;
+StartupNotify=true
