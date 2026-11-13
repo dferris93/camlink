@@ -134,6 +134,16 @@ policy, kernel modules or active video-app sessions as part of automated tests.
 
 ## Repository hygiene
 
+Maintain the root `.gitignore` for Python bytecode and compiled extensions,
+virtual environments, build/package output, test and coverage reports, tool
+caches, editor/OS files, and CamLink's local credentials, logs and recordings.
+Update it when adding tools that produce new local artifacts. Keep source,
+tests, `packaging/`, project metadata, dependency requirements and lockfiles
+trackable; sanitized `.env.example` and `.env.*.example` templates are allowed.
+Verify ignore changes with `git check-ignore -v` on representative paths and
+`git ls-files -ci --exclude-standard` to detect tracked files matched by the
+rules. An ignore rule does not remove a file that is already tracked.
+
 Keep `.venv`, Python caches, logs, captures, runtime credentials and local
 configuration out of commits. Review staged files and run
 `git diff --cached --check` before committing. Update README.md when dependencies, setup steps,

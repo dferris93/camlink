@@ -1,28 +1,78 @@
-.venv/
-venv/
+# Python bytecode and compiled extensions.
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
+*.pyd
+*.dylib
+
+# Virtual environments.
+.venv/
+.venv-*/
+venv/
+env/
+ENV/
+venv.bak/
+env.bak/
+
+# Packaging and build output. Keep packaging/ (desktop-entry source) tracked.
+build/
+dist/
+.eggs/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+wheels/
+share/python-wheels/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Test, coverage, lint and type-checking caches/reports.
+.tox/
+.nox/
 .pytest_cache/
+.hypothesis/
 .mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
 .ruff_cache/
 .coverage
 .coverage.*
 coverage.xml
 htmlcov/
-build/
-dist/
-*.egg-info/
+nosetests.xml
+junit.xml
+/test-results/
+.ipynb_checkpoints/
 
-# Local configuration, credentials, and generated diagnostics.
+# Local configuration and credentials; sanitized example files may be tracked.
 .env
 .env.*
 !.env.example
+!.env.*.example
 *.key
 *.pem
 *.p12
 *.pfx
 *.sdp
+
+# Generated diagnostics and webcam recordings.
 *.log
+/core
+/core.[0-9]*
+*.stackdump
 /artifacts/
-/test-results/
 /recordings/
+
+# Editor and operating-system files.
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
