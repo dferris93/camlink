@@ -442,6 +442,50 @@ while True:
         self.assertTrue(all(p.state() == QProcess.ProcessState.NotRunning for p in window.controller.processes))
         self.assertTrue(window.preview.image.isNull())
 
+    def test_receiver_connects_controls_wait_without_capture_and_forget_code(self):
+        import socket
+        with socket.socket() as probe:
+            probe.bind(('127.0.0.1', 0))
+            port = probe.getsockname()[1]
+        window = WebcamWindow()
+        window.show()
+        try:
+            self.wait(lambda: window.camera_box.count() == 2)
+            window.transport_box.setCurrentIndex(window.transport_box.findData('pull'))
+            self.assertFalse(window.receiver_edit.isVisible())
+            self.assertFalse(window.udp_port_box.isVisible())
+            self.assertTrue(window.listen_port_box.isVisible())
+            self.assertTrue(window.pairing_code.isVisible())
+            window.listen_port_box.setValue(port)
+            window.start_button.click()
+            self.wait(lambda: window.controller.state == 'Waiting for receiver')
+            code = window.pairing_code.text()
+            self.assertTrue(code.startswith('CL1.'))
+            self.assertIsNone(window.controller.sender)
+            self.assertIsNone(window.controller.master)
+            self.assertNotIn(code, window.log_box.toPlainText())
+            self.assertNotIn(code, [window.settings.value(key) for key in window.settings.allKeys()])
+        finally:
+            window.close()
+            self.wait(lambda: window.controller.state == 'Stopped')
+        self.assertEqual(window.pairing_code.text(), '')
+        self.assertIsNone(window.controller.pull.server)
+
+    def test_receiver_window_clears_code_without_saving_it(self):
+        from receiver import ReceiverWindow
+        window = ReceiverWindow()
+        window.show()
+        self.assertEqual(window.controller.state, 'Stopped')
+        self.assertEqual(window.controller.processes, [])
+        window.host.setText('receiver.example')
+        window.code.setText('invalid-one-time-code')
+        window.connect_button.click()
+        self.assertEqual(window.code.text(), '')
+        self.assertEqual(window.controller.state, 'Stopped')
+        self.assertNotIn('invalid-one-time-code', window.details.toPlainText())
+        self.assertNotIn('invalid-one-time-code', [window.settings.value(key) for key in window.settings.allKeys()])
+        window.close()
+
 
 if __name__ == "__main__":
     unittest.main()

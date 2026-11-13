@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Desktop controls for sharing a laptop/USB webcam over SSH or RTP/UDP."""
+"""Linux webcam sender and shared Linux/macOS receiver entry point."""
 import json
 import resource
 from fractions import Fraction
@@ -98,6 +98,7 @@ class WebcamWindow(QMainWindow):
         self.transport_box = QComboBox()
         self.transport_box.addItem("SSH", "ssh")
         self.transport_box.addItem("Secure RTP (UDP)", "rtp")
+        self.transport_box.addItem("Receiver connects (TLS/TCP)", "pull")
         self.transport_box.setCurrentIndex(max(0, self.transport_box.findData(self.settings.value("transport", "ssh"))))
         receiver_form.addRow("Video transport", self.transport_box)
         self.udp_host_edit = QLineEdit(self.settings.value("udp_host", ""))
@@ -109,17 +110,27 @@ class WebcamWindow(QMainWindow):
         self.udp_port_box.setValue(self.settings.value("udp_port", 5004, type=int))
         receiver_form.addRow("RTP destination", self.udp_host_edit)
         receiver_form.addRow("RTP port", self.udp_port_box)
+        self.listen_port_box = QSpinBox()
+        self.listen_port_box.setRange(1024, 65535)
+        self.listen_port_box.setValue(self.settings.value("listen_port", 8443, type=int))
+        receiver_form.addRow("Listen TCP port", self.listen_port_box)
+        self.pairing_code = QLineEdit()
+        self.pairing_code.setReadOnly(True)
+        self.pairing_code.setPlaceholderText("Start to generate a one-time pairing code")
+        self.pairing_code.setToolTip("Copy privately to CamLink Receiver. This code is never saved in settings or logs.")
+        receiver_form.addRow("Pairing code", self.pairing_code)
+        self.controller.pairing_code_changed.connect(self.pairing_code.setText)
         self.transport_hint = QLabel()
         self.transport_hint.setWordWrap(True)
         self.transport_hint.setObjectName("hint")
         receiver_form.addRow("", self.transport_hint)
         self.receiver_form = receiver_form
         self.transport_box.currentIndexChanged.connect(self.transport_changed)
+        self.receiver_hint = QLabel()
+        self.receiver_hint.setWordWrap(True)
+        self.receiver_hint.setObjectName("hint")
+        receiver_form.addRow("", self.receiver_hint)
         self.transport_changed()
-        receiver_hint = QLabel('Appears as “Remote Webcam”. Release it in Zoom before changing resolution.')
-        receiver_hint.setWordWrap(True)
-        receiver_hint.setObjectName("hint")
-        receiver_form.addRow("", receiver_hint)
         controls.addWidget(receiver_card)
         controls.addStretch()
 
@@ -186,9 +197,18 @@ class WebcamWindow(QMainWindow):
 
     def transport_changed(self):
         rtp = self.transport_box.currentData() == "rtp"
+        pull = self.transport_box.currentData() == "pull"
+        self.receiver_form.setRowVisible(self.receiver_edit, not pull)
         self.receiver_form.setRowVisible(self.udp_host_edit, rtp)
         self.receiver_form.setRowVisible(self.udp_port_box, rtp)
+        self.receiver_form.setRowVisible(self.listen_port_box, pull)
+        self.receiver_form.setRowVisible(self.pairing_code, pull)
+        self.receiver_hint.setText(
+            'Receiver output: “Remote Webcam” on Linux; “OBS Virtual Camera” on macOS.' if pull else
+            'Appears as “Remote Webcam”. Release it in Zoom before changing resolution.')
         self.transport_hint.setText(
+            "The receiver opens an outbound secure connection to this computer. Share the pairing code privately."
+            if pull else
             "Encrypted, authenticated UDP video. A fresh session key is shared over SSH each time you start."
             if rtp else "Encrypted video over SSH. Password and verification-code prompts appear when needed.")
 
@@ -366,8 +386,11 @@ class WebcamWindow(QMainWindow):
         self.settings.setValue("transport", transport)
         self.settings.setValue("udp_host", udp_host)
         self.settings.setValue("udp_port", udp_port)
-        self.append_log(f"{camera.description}: {mode.width}x{mode.height}, {rate_text(fps)} fps → {receiver}")
-        self.controller.start(StreamConfig(camera.serial, mode.width, mode.height, fps, receiver, transport, udp_host, udp_port))
+        listen_port = self.listen_port_box.value()
+        self.settings.setValue("listen_port", listen_port)
+        destination = "receiver connects here" if transport == "pull" else receiver
+        self.append_log(f"{camera.description}: {mode.width}x{mode.height}, {rate_text(fps)} fps → {destination}")
+        self.controller.start(StreamConfig(camera.serial, mode.width, mode.height, fps, receiver, transport, udp_host, udp_port, listen_port))
 
     def state_changed(self, state):
         self.preview.set_state(state)
@@ -377,7 +400,7 @@ class WebcamWindow(QMainWindow):
         self.status.style().polish(self.status)
         idle = state == "Stopped"
         for widget in (self.camera_box, self.resolution_box, self.fps_box, self.receiver_edit, self.refresh_button,
-                       self.transport_box, self.udp_host_edit, self.udp_port_box):
+                       self.transport_box, self.udp_host_edit, self.udp_port_box, self.listen_port_box):
             widget.setEnabled(idle)
         self.start_button.setEnabled(idle and bool(self.cameras))
         self.stop_button.setEnabled(state not in ("Stopped", "Stopping"))
@@ -401,6 +424,7 @@ class WebcamWindow(QMainWindow):
 STYLE = """
 QWidget { font-size: 14px; color: #e7edf5; }
 QMainWindow { background: #111923; }
+QWidget#receiverWindow { background: #111923; }
 QLabel#title { font-size: 27px; font-weight: 600; }
 QLabel#subtitle, QLabel#hint { color: #9aabbd; }
 QLabel#hint { font-size: 12px; }
@@ -422,6 +446,9 @@ QToolButton { color: #a9bfd7; border: none; padding: 4px; }
 
 
 def main():
+    if sys.platform == "darwin" or "--receive" in sys.argv[1:]:
+        from receiver import main as receive_main
+        return receive_main()
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     app = QApplication(sys.argv)
     app.setApplicationName("CamLink")

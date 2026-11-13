@@ -1,18 +1,33 @@
 # CamLink
 
-PyQt6 desktop app for sending a local webcam over SSH or encrypted SRTP/UDP to the `Remote Webcam`
-virtual camera (`/dev/video42`) on the remote computer.
+> [!WARNING]
+> **RECEIVER CONNECTS MODE IS EXPERIMENTAL AND UNTESTED ON REAL RECEIVER SYSTEMS.**
+> The TLS/TCP mode has not been tested end to end with a physical webcam and
+> a Linux or macOS receiver's virtual camera, including OBS Virtual Camera on
+> macOS. Automated tests use local connections and simulated camera outputs;
+> they do **not** establish that this mode works for real video calls.
+> **Do not rely on this mode for important calls until you have tested your setup.**
+
+PyQt6 desktop app for sharing a Linux webcam with another computer. Linux
+receivers expose `Remote Webcam` (`/dev/video42`); macOS receivers use
+`OBS Virtual Camera`. Video can travel over SSH, authenticated SRTP/UDP, or an
+outbound connection opened by the receiver using secure WebSockets (TLS/TCP).
 
 ## Quick start
 
 The **sender** is the Linux desktop with the physical webcam. The **receiver**
-is the Linux computer running Zoom or another video app. Choose the Ubuntu or
-Fedora commands separately for each computer; their distributions can differ.
+runs Zoom or another video app. The commands below cover Linux computers using
+SSH/SRTP. For a Mac or a Linux receiver that cannot accept inbound connections,
+use [Receiver-connects mode](#receiver-connects-mode-linux-and-macos).
+Choose the Ubuntu or Fedora commands separately for each Linux computer;
+their distributions can differ.
 The Ubuntu commands target Ubuntu 24.04 LTS and compatible releases.
 
 **Use Secure RTP (UDP) for video.** It is recommended for low latency,
-especially on lossy networks. Use SSH video only as a fallback when UDP is
-unavailable. Both transports still require SSH for sign-in and receiver setup;
+especially on lossy networks when SSH and inbound UDP are available on the
+Linux receiver. Use **Receiver connects (TLS/TCP)** when the receiver needs to
+connect outward, or SSH video as a fallback for existing SSH receivers.
+SSH video and SRTP both require SSH for sign-in and receiver setup;
 see [Video transport and sign-in](#video-transport-and-sign-in) for details.
 
 ### 1. Install the sender dependencies
@@ -166,6 +181,122 @@ verified capabilities. Unsupported modes produce a startup error. Raw video
 and MJPEG are supported. The stream regenerates timestamps to work around the
 built-in camera's broken PipeWire timestamps.
 
+## Receiver-connects mode (Linux and macOS)
+
+> [!WARNING]
+> **Untested experimental feature on both Linux and macOS.** Neither real
+> Linux virtual-camera output nor native macOS/OBS operation has been verified
+> for this mode. The instructions below still need end-to-end hardware testing.
+
+This is a shared mode for **either receiver OS**, intended for direct LAN/VPN
+connections. The receiver opens one outbound secure WebSocket connection to
+the sender. The sender returns H.264/MPEG-TS video over that same TLS/TCP
+connection. No SSH server, inbound receiver port, or UDP access is required
+on the receiver. Only the sender listens; its TCP port defaults to **8443**
+and can be changed in the sender UI. Allow that port from the receiver through
+the sender's firewall and the intervening network.
+
+The connection must still be allowed by the managed computer's network policy.
+This mode does not provide an internet relay or bypass application restrictions
+or TLS inspection. Compared with SRTP, TCP can delay newer video while it
+retransmits lost packets. Send and receive queues are bounded; a connection
+that cannot keep up stops with an error instead of accumulating a large backlog.
+
+### Set up a Linux receiver
+
+Install the receiver packages and create `/dev/video42` using the
+[Linux instructions below](#install). For this mode, the receiver also needs a
+checkout, Python venv support and the Qt runtime libraries. It does not need
+to enable SSH or install GStreamer just to receive TLS/TCP video.
+
+On Ubuntu, add the GUI prerequisites:
+
+```bash
+sudo apt install python3-venv python3-pip libxcb-cursor0 libxkbcommon-x11-0
+```
+
+On Fedora:
+
+```bash
+sudo dnf install python3-pip xcb-util-cursor libxkbcommon-x11
+```
+
+From the CamLink checkout on the receiver:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+./camlink --receive
+```
+
+Linux output uses the same format checks before configuration, after
+configuration, and after the first decoded frames as the SSH receiver.
+Release `Remote Webcam` in Zoom before changing resolution.
+
+### Set up a macOS receiver
+
+The pinned GUI dependencies require **macOS 14 or newer**. Use the current OBS
+release (at least OBS 30). Install
+[Homebrew](https://brew.sh/) if needed, then install
+[Python 3.14](https://formulae.brew.sh/formula/python@3.14),
+[FFmpeg](https://formulae.brew.sh/formula/ffmpeg), and
+[OBS](https://formulae.brew.sh/cask/obs):
+
+```bash
+brew install python@3.14 ffmpeg
+brew install --cask obs
+```
+
+Open OBS once, approve its camera extension in System Settings, click
+**Start Virtual Camera**, then **Stop Virtual Camera**, and close OBS.
+The extension may require administrator/IT approval on a managed Mac.
+CamLink feeds the installed virtual camera through `pyvirtualcam`; OBS stays
+closed during CamLink streaming. See the
+[OBS setup guide](https://obsproject.com/kb/virtual-camera-troubleshooting) and
+[pyvirtualcam Mac instructions](https://github.com/letmaik/pyvirtualcam#macos-obs).
+
+From the CamLink checkout on the Mac, create its own venv. Python 3.14 is used
+because pyvirtualcam 0.15 provides wheels for it, including Apple silicon:
+
+```bash
+"$(brew --prefix python@3.14)/bin/python3.14" -m venv .venv
+.venv/bin/python -m pip install -r requirements-macos.txt
+./camlink --receive
+```
+
+FFmpeg decodes into packed I420 frames and the local Python bridge sends them
+to **OBS Virtual Camera**. The Mac needs neither PipeWire nor GStreamer.
+Only one producer can use the OBS virtual camera at a time. The bridge checks
+its configured frame dimensions and complete frame boundaries; it does not
+provide Linux's V4L2 consumer-format readback. Native macOS/OBS integration,
+including macOS 27 on Apple silicon, still requires testing on that hardware.
+
+### Pair and stream
+
+1. On the Linux sender, choose the camera, resolution and frame rate, select
+   **Receiver connects (TLS/TCP)**, choose the listening port, and click
+   **Start streaming**. Capture waits for the receiver to be ready.
+2. On the receiver, launch `./camlink --receive`, enter the sender's IPv4
+   address or hostname, and paste the complete pairing code shown on the
+   sender. Click **Connect**.
+3. After video starts, select **Remote Webcam** on Linux or **OBS Virtual
+   Camera** on macOS in Zoom or another video app.
+
+The code contains the sender's certificate fingerprint, TCP port and a random
+256-bit authentication token. Share it privately through a trusted channel,
+as you would a password. The receiver pins the sender's certificate before
+transmitting the token. The sender accepts one receiver per session; the code
+expires after five minutes if unused and is consumed on successful pairing.
+Each Start generates a new certificate and token in memory. Neither is saved
+in settings, command arguments, environment variables, logs or credential files.
+The receiver clears its code field on Connect; only its sender address is saved.
+
+Stop or closing either app disconnects the session and releases owned capture
+and playback processes. Heartbeat and video watchdogs also stop abandoned
+connections. Restart on the sender to generate a new code after a disconnect.
+This mode supports even-sized frames up to 3840×2160 pixels in total and up to
+120 fps, subject to the physical and virtual cameras' supported modes.
+
 ## Video transport and sign-in
 
 **Secure RTP (UDP) is the recommended video transport**, especially on lossy
@@ -182,7 +313,7 @@ receiver cannot be reached directly over UDP. It sends H.264 video in MPEG-TS
 through the encrypted SSH connection. TCP's ordered delivery can hold up
 newer video while lost packets are retransmitted.
 
-Both modes use SSH to prepare the virtual camera, start FFmpeg, check the video
+The SSH and SRTP modes use SSH to prepare the Linux virtual camera, start FFmpeg, check the video
 format, and stop the receiver. Both include the local preview.
 
 Select **Secure RTP (UDP)** to reveal **RTP port** and **RTP destination**. The port can
@@ -237,7 +368,9 @@ stop them after approximately 15 seconds, with bounded child-process cleanup.
 
 ## Install
 
-CamLink currently targets Linux on both ends. **Sender** means the computer
+The following dependency table and distro instructions cover **SSH/SRTP with
+Linux on both ends**. See [Receiver-connects mode](#receiver-connects-mode-linux-and-macos)
+for Linux/macOS receivers that initiate their own connection. **Sender** means the computer
 with the physical webcam and GUI; **receiver** means the computer running Zoom
 or another consumer of the virtual webcam. Choose the instructions for each
 computer's distribution independently; the two distributions need not match.
@@ -248,6 +381,7 @@ computer's distribution independently; the two distributions need not match.
 | --- | --- | --- |
 | Python 3.10+ and a venv | GUI and launcher | System Python for SRTP; no venv needed |
 | PyQt6 from `requirements.txt` | Required inside `.venv` | Not required |
+| `cryptography` from `requirements.txt` | Creates ephemeral TLS identities for receiver-connects mode | Not required for SSH/SRTP |
 | Running PipeWire and WirePlumber session; `pw-dump` | Required for camera discovery/capture | Not required by CamLink |
 | OpenSSH | Client | Server and a reachable user account |
 | GStreamer tools, base/good/bad plugins | Capture, conversion, preview, H.264 parsing, SRTP | SRTP reception and H.264 depayloading only |
@@ -455,6 +589,7 @@ a symlink. To add a per-user command and application-menu entry:
 mkdir -p ~/.local/bin ~/.local/share/applications ~/.local/share/icons/hicolor/scalable/apps
 ln -s "$PWD/camlink" ~/.local/bin/camlink
 cp packaging/laptop-webcam.desktop ~/.local/share/applications/
+cp packaging/camlink-receiver.desktop ~/.local/share/applications/
 cp webcam.svg ~/.local/share/icons/hicolor/scalable/apps/camlink.svg
 update-desktop-database ~/.local/share/applications
 ```
@@ -526,6 +661,13 @@ modified, unauthenticated, malformed, unknown-source, and replayed packets to
 the actual SRTP decoder. Tests need permission to create local Unix and UDP
 sockets. SRTP integration tests additionally need the system media bindings
 and local FFmpeg.
+
+Receiver-connects tests use real local TLS/WebSocket connections, certificate
+pinning and rejected credentials, pairing expiry/rotation, bounded queues,
+and generated H.264 video decoded by FFmpeg. Linux virtual-device operations
+are fixtures in the portable tests; OBS frame delivery still needs a native
+Mac smoke test. Run the suite with the venv dependencies installed so TLS
+identity generation is covered.
 
 See [AGENTS.md](AGENTS.md) for the architecture, security invariants, and
 required regression coverage. Report skipped integration tests explicitly;

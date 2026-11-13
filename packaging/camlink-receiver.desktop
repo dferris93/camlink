@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=CamLink Receiver
+Comment=Receive a webcam over an outbound secure connection
+Exec=camlink --receive
+Icon=camlink
+Terminal=false
+Categories=AudioVideo;Video;
+StartupNotify=true

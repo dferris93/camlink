@@ -3,17 +3,21 @@
 ## Purpose and runtime
 
 CamLink is a Linux PyQt6 desktop application that shares a local PipeWire webcam
-with a remote Linux computer. Users select the camera, resolution, frame rate,
-SSH destination, and either encrypted SSH video or authenticated SRTP over UDP.
-Both transports use SSH for remote setup and lifecycle control. The remote
-output is the v4l2loopback device `/dev/video42`, labeled `Remote Webcam`, for
-Zoom and other video applications. Local preview shares the camera capture.
+with a Linux or macOS receiver. Users select the camera, resolution, frame rate,
+and transport. SSH video and authenticated SRTP/UDP use SSH to manage a Linux
+receiver. Receiver-connects mode uses a locally launched receiver on either OS
+that opens an outbound WSS/TLS/TCP connection to the Linux sender. It must not
+require SSH, inbound receiver connections, or UDP availability. Linux output is
+v4l2loopback `/dev/video42`, labeled `Remote Webcam`; macOS output is OBS Virtual
+Camera through pyvirtualcam. Local preview shares the sender's capture.
 
 Run the GUI through `./camlink`; it uses the checkout's `.venv`. SRTP workers
 intentionally use `/usr/bin/python3` with distribution-provided PyGObject and
 GStreamer bindings on both computers. The receiver does not need a checkout or
-PyQt: its worker source and runtime configuration are sent over SSH. Consult
-README.md for sender/receiver dependencies on Ubuntu and Fedora.
+PyQt for SSH/SRTP: its worker source and runtime configuration are sent over SSH.
+Receiver-connects mode instead runs `./camlink --receive` from a local checkout
+and venv. Its Linux backend uses FFmpeg/V4L2; its macOS backend uses FFmpeg and
+the venv's pyvirtualcam/numpy. Consult README.md for dependencies and OBS setup.
 
 ## Code map
 
@@ -26,6 +30,9 @@ README.md for sender/receiver dependencies on Ubuntu and Fedora.
 | `auth.py`, `askpass.py` | Private Unix-socket bridge for OpenSSH prompts |
 | `srtp.py` | Fresh session keys, stream identifiers, private configuration messages |
 | `media_worker.py` | System-GStreamer sender/receiver, SRTP authentication and replay checks |
+| `pull.py` | Receiver-initiated WSS transport, in-memory TLS identities, certificate pinning and one-use pairing |
+| `receiver.py` | Cross-platform receiver GUI, local Linux setup/readback, playback and disconnect cleanup |
+| `obs_receiver.py` | MPEG-TS decoding and complete I420 frames delivered to OBS Virtual Camera |
 | `preview.py` | Private preview FIFO, bounded JPEG parsing, aspect-correct display |
 | `camlink`, `packaging/` | Portable venv launcher and desktop-entry source |
 
@@ -43,6 +50,13 @@ README.md for sender/receiver dependencies on Ubuntu and Fedora.
 - Never put passwords, TOTP responses or SRTP keys in argv, environment
   variables, logs, settings, fixtures or disk files. Preserve core/debug-dump
   protections and bounded cleanup. Use stdin/private IPC for credentials.
+- Receiver-connects mode keeps TLS private keys and pairing codes in memory.
+  Generate fresh credentials per Start, pin the certificate before sending the
+  pairing token, consume the token once, and expire unused codes. Do not relax
+  certificate verification except for the matching self-signed certificate and
+  hostname mismatch. Never log/save pairing codes or start capture before the
+  receiver authenticates and acknowledges its mode. Bound messages and queues;
+  stop on disconnect, missing heartbeats, stalled frames or overloaded output.
 - Probe and read back the remote pixel format, dimensions, stride and buffer
   size before capture, after configuration, and after video starts. Zoom can
   retain buffers and silently clamp a new mode. Do not declare Streaming when
@@ -52,11 +66,14 @@ README.md for sender/receiver dependencies on Ubuntu and Fedora.
   black frames and consume excessive CPU. Preview rate limiting happens later.
 - Use camera-advertised frame rates where available. Fallback rates, including
   60 fps, are requests, not proof that a camera physically produces that rate.
-- The app is CamLink; its remote virtual camera is `Remote Webcam`. Use that
+- The app is CamLink; its Linux virtual camera is `Remote Webcam`. Use that
   camera label consistently in receiver setup, validation, UI and documentation.
   Existing receivers with the old label need their v4l2loopback `card_label`
   updated and a reboot, as documented in README.md. Never unload an active
   module or accept an unrelated device to bypass the name check.
+- The macOS backend uses the installed OBS camera and its `OBS Virtual Camera`
+  name. Preserve the Linux backend. Do not introduce a custom Apple extension,
+  assume a Mac SSH server, or require inbound ports on the receiver.
 - Keep `QSettings("LocalTools", "LaptopWebcam")` and desktop ID `laptop-webcam`
   as compatibility identifiers so preferences and shortcuts survive upgrades.
   Changing either identifier requires a migration strategy.
@@ -79,13 +96,18 @@ implementation for meaningful failure and lifecycle checks.
 | Preview | Fragmented JPEG boundaries, bounded malformed-input buffering, private FIFO permissions/cleanup, and a real pipeline splitting one source into stream plus preview |
 | SRTP | Real encrypted H.264 decoding on a selected odd UDP port, fresh keys/SSRCs on restart, no keys in argv/logs, receiver shutdown without video |
 | SRTP rejection | Actual decoder rejects previous/wrong keys, modified packets, plaintext RTP, malformed packets, unknown SSRCs and replays; rejected input does not stop or poison valid authentication |
+| Receiver-connects transport | Real TLS pairing/video, wrong certificate/token rejection, expired/rotated/consumed codes, no capture before readiness, bounded buffers, disconnect/timeout cleanup and no SSH dependency |
+| Local receiver outputs | Linux mode validation before/after configuration and first frames; complete I420 frame assembly, truncated output failure, OBS startup errors, and no credentials in subprocess arguments |
 
-Current suites are `tests/test_app.py`, `tests/test_preview.py` and
-`tests/test_rtp.py`. Qt/process tests use isolated QSettings and controlled
+Current suites are `tests/test_app.py`, `tests/test_preview.py`,
+`tests/test_rtp.py` and `tests/test_pull.py`. Qt/process tests use isolated QSettings and controlled
 subprocess fixtures. Media tests use generated test patterns and real local
 GStreamer/FFmpeg; they do not require a camera, remote account or root.
 Authentication fixtures exercise IPC and dialogs, not a live server's PAM/MFA
 policy. Do not describe them as proof of a particular server configuration.
+Portable receiver tests exercise real WSS video and decoding with virtual-device
+fixtures. They do not prove native OBS or macOS compatibility. Report that limit
+until a real Mac verifies camera activation, frames, mode changes and shutdown.
 
 Before committing behavioral changes, run:
 

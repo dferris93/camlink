@@ -14,6 +14,7 @@ from preview import PreviewPipe
 from auth import AskpassBridge
 from remote import configure_script, requested_format, validate_remote_format
 from srtp import MEDIA_PYTHON, WORKER, SrtpSession
+from pull import CHUNK_SIZE, PullServer, mode_for
 
 SSH_OPTIONS = ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-o", "ServerAliveInterval=5",
                "-o", "ServerAliveCountMax=2", "-o", "Compression=no"]
@@ -46,6 +47,7 @@ class StreamConfig:
     transport: str = "ssh"
     udp_host: str = ""
     udp_port: int = 5004
+    listen_port: int = 8443
 
     def validate(self):
         if not self.camera.isdecimal():
@@ -54,10 +56,14 @@ class StreamConfig:
             raise ValueError("Resolution must have positive, even dimensions up to 8192.")
         if not 0 < self.fps <= 120:
             raise ValueError("Frame rate must be between 0 and 120 fps.")
-        if not re.fullmatch(r"(?:[A-Za-z0-9_.-]+@)?(?:[A-Za-z0-9][A-Za-z0-9.-]*|\[[0-9a-fA-F:]+\])", self.receiver):
+        if self.transport != "pull" and not re.fullmatch(r"(?:[A-Za-z0-9_.-]+@)?(?:[A-Za-z0-9][A-Za-z0-9.-]*|\[[0-9a-fA-F:]+\])", self.receiver):
             raise ValueError("Enter the receiver as user@hostname or user@IP-address.")
-        if self.transport not in ("ssh", "rtp"):
-            raise ValueError("Choose SSH or Secure RTP (UDP) transport.")
+        if self.transport not in ("ssh", "rtp", "pull"):
+            raise ValueError("Choose SSH, Secure RTP, or Receiver connects mode.")
+        if self.transport == "pull":
+            mode_for(self)
+            if not 1024 <= self.listen_port <= 65535:
+                raise ValueError("Use a TCP listening port between 1024 and 65535.")
         if self.udp_host:
             host = self.udp_host.strip("[]")
             try:
@@ -145,6 +151,7 @@ class StreamController(QObject):
     preview_frame = pyqtSignal(QImage)
     authentication_requested = pyqtSignal(str, str)
     authentication_dismissed = pyqtSignal()
+    pairing_code_changed = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -161,6 +168,12 @@ class StreamController(QObject):
         self.sender_pipeline = None
         self.srtp_session = None
         self.auth_buffer = ""
+        self.pull = PullServer(self)
+        self.pull.code_changed.connect(self.pairing_code_changed)
+        self.pull.authenticated.connect(self.pull_authenticated)
+        self.pull.ready.connect(self.start_pull_video)
+        self.pull.progress.connect(self.pull_progress)
+        self.pull.failed.connect(self.fail)
         self.auth = AskpassBridge(self)
         self.auth.requested.connect(self.authentication_prompt)
         self.auth.dismissed.connect(self.authentication_dismissed)
@@ -245,7 +258,9 @@ class StreamController(QObject):
                 self.watchdog.start(20000)
 
     def timed_out(self):
-        if self.state in ("Connecting", "Sign in"):
+        if self.config and self.config.transport == "pull":
+            self.fail("Receiver connection or video timed out. Check the receiver app and start a new session.")
+        elif self.state in ("Connecting", "Sign in"):
             self.fail("SSH connection timed out. Check the remote computer and Connection details.")
         elif self.config and self.config.transport == "rtp":
             self.fail(f"No authenticated video arrived over SRTP. Check the destination and UDP port {self.config.udp_port}, "
@@ -258,7 +273,7 @@ class StreamController(QObject):
             return
         try:
             config.validate()
-            for program in ("ssh", "gst-launch-1.0"):
+            for program in (("gst-launch-1.0",) if config.transport == "pull" else ("ssh", "gst-launch-1.0")):
                 if not shutil.which(program):
                     raise ValueError(f"Required program not found: {program}")
         except ValueError as error:
@@ -277,6 +292,16 @@ class StreamController(QObject):
         self.sender = None
         self.sender_pipeline = None
         self.srtp_session = SrtpSession.create() if config.transport == "rtp" else None
+        if config.transport == "pull":
+            self.set_state("Waiting for receiver")
+            try:
+                self.pull.start(mode_for(config), config.listen_port)
+            except (ValueError, ImportError, OSError) as error:
+                self.fail(f"Cannot start secure listener: {error}")
+                return
+            self.log.emit(f"Listening on TCP port {config.listen_port}. Open CamLink Receiver on Linux or macOS and pair.")
+            self.watchdog.start(300000)
+            return
         self.set_state("Connecting")
         try:
             environment = self.auth.start()
@@ -291,6 +316,42 @@ class StreamController(QObject):
         self.master.start("ssh", options + ["-M", "-S", self.auth.control_path, "-o", "ControlPersist=no",
                                           self.config.receiver, AUTH_COMMAND])
         self.watchdog.start(60000)
+
+    def pull_authenticated(self):
+        if self.state == "Waiting for receiver":
+            self.set_state("Preparing receiver")
+            self.watchdog.start(30000)
+            self.log.emit("Receiver paired; waiting for its virtual camera.")
+
+    def start_pull_video(self):
+        if self.state != "Preparing receiver":
+            return
+        self.set_state("Starting camera")
+        self.watchdog.start(20000)
+        try:
+            path = self.preview.start()
+        except OSError as error:
+            self.fail(f"Cannot open local preview: {error}")
+            return
+        self.sender = self.process("Camera")
+        self.sender.readyReadStandardOutput.connect(self.send_pull_video)
+        self.sender.start("gst-launch-1.0", sender_arguments(self.config, path))
+
+    def send_pull_video(self):
+        process = self.sender
+        if process is None:
+            return
+        while process.bytesAvailable() and self.state not in ("Stopped", "Stopping"):
+            if not self.pull.send_video(bytes(process.read(CHUNK_SIZE))):
+                self.fail("Cannot send video to the receiver. Check the connection and reconnect.")
+                break
+
+    def pull_progress(self, frames):
+        if self.state in ("Starting camera", "Streaming") and frames > self.last_frame:
+            self.last_frame = frames
+            if self.state != "Streaming":
+                self.set_state("Streaming")
+            self.watchdog.start(8000)
 
     def start_video(self):
         self.set_state("Starting camera")
@@ -425,6 +486,7 @@ class StreamController(QObject):
         self.watchdog.stop()
         self.heartbeat.stop()
         self.set_state("Stopping")
+        self.pull.stop()
         self.auth.respond(None)
         self.authentication_dismissed.emit()
         for process in self.processes:
